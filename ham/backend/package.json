@@ -1,0 +1,41 @@
+{
+  "name": "healthcare-appointment-manager-backend",
+  "version": "1.0.0",
+  "description": "Backend API for the Healthcare Appointment & Follow-up Manager",
+  "main": "src/server.js",
+  "type": "commonjs",
+  "scripts": {
+    "dev": "nodemon src/server.js",
+    "start": "node src/server.js",
+    "prisma:generate": "prisma generate",
+    "prisma:migrate": "prisma migrate dev",
+    "prisma:deploy": "prisma migrate deploy",
+    "prisma:studio": "prisma studio",
+    "seed": "node prisma/seed.js"
+  },
+  "dependencies": {
+    "@prisma/client": "^5.19.1",
+    "bcryptjs": "^2.4.3",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "express-async-errors": "^3.1.1",
+    "express-rate-limit": "^7.4.0",
+    "google-auth-library": "^9.14.1",
+    "googleapis": "^140.0.1",
+    "helmet": "^7.1.0",
+    "joi": "^17.13.3",
+    "jsonwebtoken": "^9.0.2",
+    "node-cron": "^3.0.3",
+    "nodemailer": "^6.9.15",
+    "uuid": "^9.0.1",
+    "winston": "^3.14.2"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.4",
+    "prisma": "^5.19.1"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

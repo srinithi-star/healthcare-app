@@ -1,0 +1,201 @@
+// Healthcare Appointment & Follow-up Manager
+// Prisma schema — PostgreSQL
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  PATIENT
+  DOCTOR
+  ADMIN
+}
+
+enum AppointmentStatus {
+  HELD        // slot temporarily reserved while patient completes booking
+  BOOKED
+  CANCELLED
+  COMPLETED
+  NO_SHOW
+}
+
+enum Urgency {
+  LOW
+  MEDIUM
+  HIGH
+}
+
+enum NotificationType {
+  BOOKING_CONFIRMATION
+  REMINDER
+  CANCELLATION
+  RESCHEDULE
+  DOCTOR_LEAVE
+  MEDICATION_REMINDER
+}
+
+enum NotificationStatus {
+  PENDING
+  SENT
+  FAILED
+  RETRYING
+}
+
+model User {
+  id            String   @id @default(uuid())
+  email         String   @unique
+  passwordHash  String
+  role          Role
+  firstName     String
+  lastName      String
+  phone         String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  // Google OAuth tokens for calendar sync (per-user, since both patient & doctor get events)
+  googleRefreshToken String?
+  googleAccessToken  String?
+  googleTokenExpiry  DateTime?
+
+  doctorProfile   DoctorProfile?
+  patientAppointments Appointment[] @relation("PatientAppointments")
+  notifications   Notification[]
+
+  @@index([role])
+}
+
+model DoctorProfile {
+  id             String   @id @default(uuid())
+  userId         String   @unique
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  specialisation String
+  bio            String?
+  slotDurationMinutes Int  @default(20)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  workingHours   WorkingHour[]
+  leaveDays      LeaveDay[]
+  appointments   Appointment[] @relation("DoctorAppointments")
+
+  @@index([specialisation])
+}
+
+// Recurring weekly availability, e.g. Mon 09:00-17:00
+model WorkingHour {
+  id              String   @id @default(uuid())
+  doctorProfileId String
+  doctorProfile   DoctorProfile @relation(fields: [doctorProfileId], references: [id], onDelete: Cascade)
+  dayOfWeek       Int      // 0 = Sunday ... 6 = Saturday
+  startTime       String   // "09:00" (24h, local clinic tz)
+  endTime         String   // "17:00"
+
+  @@index([doctorProfileId, dayOfWeek])
+}
+
+model LeaveDay {
+  id              String   @id @default(uuid())
+  doctorProfileId String
+  doctorProfile   DoctorProfile @relation(fields: [doctorProfileId], references: [id], onDelete: Cascade)
+  date            DateTime // date-only, stored at midnight UTC
+  reason          String?
+  createdAt       DateTime @default(now())
+
+  @@unique([doctorProfileId, date])
+}
+
+// The core anti-double-booking primitive.
+// A row here is created the instant a patient selects a slot (status HELD),
+// with a short expiry. Only one row can exist per (doctorProfileId, startTime)
+// thanks to the unique constraint below — the DB is the single source of truth
+// for conflict prevention, not application logic.
+model Appointment {
+  id              String   @id @default(uuid())
+
+  doctorProfileId String
+  doctorProfile   DoctorProfile @relation("DoctorAppointments", fields: [doctorProfileId], references: [id])
+
+  patientId       String
+  patient         User     @relation("PatientAppointments", fields: [patientId], references: [id])
+
+  startTime       DateTime
+  endTime         DateTime
+  status          AppointmentStatus @default(HELD)
+  holdExpiresAt   DateTime? // only set while status = HELD
+
+  // Pre-visit
+  symptomText         String?
+  symptomSubmittedAt  DateTime?
+  aiUrgency           Urgency?
+  aiChiefComplaint    String?
+  aiSuggestedQuestions Json?   // array of 3 strings
+  aiPreVisitRaw        Json?  // full raw LLM response for audit
+  aiPreVisitError       String? // set if LLM call failed, so UI can show fallback
+
+  // Post-visit
+  clinicalNotes        String?
+  prescription          Json?   // structured: [{drug, dose, frequency, durationDays}]
+  aiPostVisitSummary    String?
+  aiPostVisitRaw         Json?
+  aiPostVisitError        String?
+  visitCompletedAt        DateTime?
+
+  // Calendar sync
+  patientGoogleEventId String?
+  doctorGoogleEventId  String?
+
+  cancelledAt     DateTime?
+  cancelledBy     String?  // userId
+  cancelReason    String?
+
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  notifications   Notification[]
+  medicationReminders MedicationReminder[]
+
+  // This is the constraint that makes double-booking structurally impossible,
+  // independent of any race condition in application code.
+  @@unique([doctorProfileId, startTime])
+  @@index([patientId])
+  @@index([status, holdExpiresAt])
+}
+
+model MedicationReminder {
+  id             String   @id @default(uuid())
+  appointmentId  String
+  appointment    Appointment @relation(fields: [appointmentId], references: [id], onDelete: Cascade)
+  drug           String
+  dose           String
+  scheduledFor   DateTime
+  sent           Boolean  @default(false)
+  sentAt         DateTime?
+  createdAt      DateTime @default(now())
+
+  @@index([scheduledFor, sent])
+}
+
+model Notification {
+  id           String   @id @default(uuid())
+  userId       String
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  appointmentId String?
+  appointment   Appointment? @relation(fields: [appointmentId], references: [id], onDelete: SetNull)
+
+  type         NotificationType
+  channel      String   @default("email")
+  status       NotificationStatus @default(PENDING)
+  attempts     Int      @default(0)
+  lastError    String?
+  payload      Json?    // rendered subject/body snapshot for audit + retry
+  sentAt       DateTime?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([status, attempts])
+}
